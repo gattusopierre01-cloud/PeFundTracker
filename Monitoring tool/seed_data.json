@@ -1,0 +1,14 @@
+{
+  "funds": [
+    "Bowmark Capital", "Motion Equity Partners", "Inflexion",
+    "Ufenau Capital Partners", "Graphite Capital", "Phoenix Equity Partners",
+    "Key Capital Partners", "Limerston Capital", "WestBridge Capital",
+    "Naxicap Partners", "Activa Capital", "Capvis", "DPE Deutsche Private Equity"
+  ],
+  "triggers": [
+    {"firm": "Bowmark Capital", "type": "new_platform", "date": "2026-05-11", "source": "Insider Media: Bowmark invests in BCIS", "note": "construction cost data"},
+    {"firm": "Motion Equity Partners", "type": "new_platform", "date": "2026-06-11", "source": "Motion site: majority stake in Polaris", "note": "omega-3 biotech"},
+    {"firm": "Inflexion", "type": "new_platform", "date": "2026-06-09", "source": "PitchBook: Inflexion invests in MHM", "note": "accounting/tax services"},
+    {"firm": "Ufenau Capital Partners", "type": "add_on", "date": "2026-06-01", "source": "PitchBook: Hanseatic Power Service", "note": "building services add-on"}
+  ]
+}
