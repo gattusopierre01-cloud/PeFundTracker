@@ -107,6 +107,7 @@ def build_queue(funds, triggers):
             continue
         top = active[0]
         rows.append({"firm": firm, "score": score, "tier": tier, "lead": top["label"],
+                     "lead_type": top["type"], "headline": top.get("note") or top.get("source") or "",
                      "age_days": top["age_days"], "receiver": TRIGGER_TYPES[top["type"]]["receiver"],
                      "action": TIER_ACTION[tier], "n_active": len(active)})
     order = {"T1": 0, "T2": 1, "T3": 2}
@@ -166,3 +167,142 @@ def scan_fund(firm, max_items=10):
         out.append({"firm": firm, "title": title, "suggested_type": ttype,
                     "suggested_label": label, "date": pub, "source": getattr(e, "link", "")})
     return out
+
+
+# ============================================================================
+#  v3 ADDITIONS — wider sources, outreach drafts, region map, dismiss keys
+# ============================================================================
+
+# --- Wider sources: PE trade press (catches OP-hire & people moves Google ---
+#     News usually misses). Site-wide feeds; we match watched fund names in
+#     titles. NOTE: feed URLs can change — each is tried independently and any
+#     that fails to load is skipped, so the scan never breaks on a dead feed.
+TRADE_FEEDS = [
+    ("Real Deals",          "https://realdeals.eu.com/feed"),
+    ("PE News",             "https://www.penews.com/rss"),
+    ("Private Equity Wire", "https://www.privateequitywire.co.uk/feed"),
+    ("Private Equity Intl", "https://www.privateequityinternational.com/feed/"),
+]
+
+
+def scan_trade_press(funds, max_per_feed=60):
+    """Pull trade-press feeds once each and raise a candidate when a watched
+    fund name appears in a headline. Complements the per-fund Google News scan."""
+    out = []
+    names = [(f, f.lower()) for f in funds if len(f) > 3]
+    for source_name, feed_url in TRADE_FEEDS:
+        try:
+            feed = feedparser.parse(feed_url)
+        except Exception:
+            continue
+        for e in feed.entries[:max_per_feed]:
+            title = getattr(e, "title", "")
+            low = title.lower()
+            hit = next((f for f, fl in names if fl in low), None)
+            if not hit:
+                continue
+            ttype, label = guess_type(title)
+            if not ttype:
+                continue
+            try:
+                pub = datetime(*e.published_parsed[:6]).date().isoformat()
+            except Exception:
+                pub = today().isoformat()
+            out.append({"firm": hit, "title": f"{title} — {source_name}",
+                        "suggested_type": ttype, "suggested_label": label,
+                        "date": pub, "source": getattr(e, "link", "")})
+    return out
+
+
+# --- Signal -> ready draft. Short (<200w), honest-broker, no invented metrics,
+#     references the trigger, drives to the 15-min call. Swap [Loom] for yours.
+CALENDLY = "https://calendly.com/d/d3sx-q4t-jcg"
+
+OUTREACH = {
+    "new_op_hire":
+        "Hi {first} — congratulations on the move to {firm}.\n\n"
+        "When a value-creation mandate is fresh, the first question is usually *where* the "
+        "operational upside actually sits across the portfolio. That's what we do at MosaiQ: "
+        "ProcessX gives a fast, tool-agnostic read on the process-level value in a business "
+        "from public information — an honest-broker map, not a platform pitch.\n\n"
+        "Happy to run one free on a portfolio company of your choosing so you can see the "
+        "output, no strings. Worth 15 minutes? {calendly}\n\n[Loom: 90-sec demo]",
+    "new_platform":
+        "Hi {first} — saw {firm}'s new investment ({headline}).\n\n"
+        "The first 100 days are when a process baseline is most useful and least disruptive. "
+        "MosaiQ's ProcessX produces a tool-agnostic read of where operational/process value "
+        "sits in a business, from public info — useful as an independent second view alongside "
+        "your own value-creation plan.\n\n"
+        "I'd be glad to run one free on the new portfolio company so you can judge it on output. "
+        "15 minutes to walk through it? {calendly}\n\n[Loom: 90-sec demo]",
+    "add_on":
+        "Hi {first} — noted the recent bolt-on ({headline}).\n\n"
+        "Integrations are where duplicated processes quietly accumulate. ProcessX gives a fast, "
+        "tool-agnostic read on process-level value across the combined business from public "
+        "information — an independent map to sit beside your integration plan.\n\n"
+        "I can run one free on the combined entity so you can see the output. Worth 15 minutes? "
+        "{calendly}\n\n[Loom: 90-sec demo]",
+    "fund_close":
+        "Hi {first} — congratulations on the close ({headline}).\n\n"
+        "As capital goes to work, a quick read on where operational value sits helps prioritise "
+        "the value-creation agenda early. ProcessX does exactly that — tool-agnostic, from public "
+        "information, as an honest-broker view.\n\n"
+        "Happy to run one free on a current portfolio company. 15 minutes? {calendly}\n\n[Loom: 90-sec demo]",
+    "exit_prep":
+        "Hi {first} — {headline}.\n\n"
+        "Ahead of a process, a clean, independent process map can de-risk diligence and support "
+        "the operational story. ProcessX produces that from public information — tool-agnostic, "
+        "no platform commitment.\n\n"
+        "I'd be glad to run one free so you can see the output. 15 minutes? {calendly}\n\n[Loom: 90-sec demo]",
+    "portco_leadership":
+        "Hi {first} — congratulations on the new role.\n\n"
+        "New leaders often want a fast, independent baseline of where operational/process value "
+        "sits. ProcessX gives exactly that from public information — tool-agnostic, an honest read "
+        "rather than a sales pitch.\n\n"
+        "Happy to run one free on the business so you can judge it on output. Worth 15 minutes? "
+        "{calendly}\n\n[Loom: 90-sec demo]",
+    "_default":
+        "Hi {first} — saw the recent news at {firm} ({headline}).\n\n"
+        "MosaiQ's ProcessX gives a fast, tool-agnostic read on where operational/process value "
+        "sits in a business, from public information — an honest-broker map.\n\n"
+        "I'd be glad to run one free so you can see the output. 15 minutes? {calendly}\n\n[Loom: 90-sec demo]",
+}
+
+
+def draft_outreach(firm, ttype, headline=""):
+    tmpl = OUTREACH.get(ttype, OUTREACH["_default"])
+    return tmpl.format(first="[first name]", firm=firm,
+                       headline=headline or "recent news", calendly=CALENDLY)
+
+
+def linkedin_people_url(firm):
+    from urllib.parse import quote_plus as _q
+    return ("https://www.linkedin.com/search/results/people/?keywords="
+            + _q(f'{firm} operating partner'))
+
+
+# --- Region map (reuses the 240-fund master list as the single source) ------
+_REGION_GROUPS = {
+"UK & Ireland": ["Key Capital Partners","Limerston Capital","WestBridge Capital","YFM Equity Partners","Penta Capital","Perwyn","Vespa Capital","Volpi Capital","Baird Capital","EMK Capital","Silverfleet Capital","Equistone Partners Europe","Harwood Private Equity","3i Group","LDC","Livingbridge","Bowmark Capital","Graphite Capital","Phoenix Equity Partners","Bridgepoint","TowerBrook Capital Partners","Searchlight Capital Partners","Permira","Inflexion","ECI Partners","NorthEdge Capital","BGF"],
+"France": ["Naxicap Partners","Activa Capital","Azulis Capital","Parquest Capital","Qualium Investissement","Siparex","Sparring Capital","TCR Capital","Turenne Capital","UI Investissement","LBO France","Cerea Partners","Argos Wityu","21 Invest","Meanings Capital Partners","Eurazeo","Eurazeo PME","Five Arrows","Ardian","Astorg","Apax Partners France","Flexstone Partners","Access Capital Partners","SWEN Capital Partners","NextStage AM","Wendel","Sodero Gestion","LT Capital","Arkea Capital","Ouest Croissance","Amethis","Montefiore Investment","Metric Capital Partners","PAI Partners","Merieux Equity Partners","Tikehau Capital","Truffle Capital","Unexo","RAISE","Pergam","Amundi Private Equity Funds","Seven2"],
+"DACH": ["Capvis","AUCTUS Capital Partners","DPE Deutsche Private Equity","EMERAM Capital Partners","Maxburg Capital Partners","capiton","Hannover Finanz","VR Equitypartner","Finatem","Paragon Partners","Nord Holding","ODEWALD","AFINUM","ECM Equity Capital Management","Lafayette Mittelstand Capital","NEXX Capital","Beyond Capital Partners","Accursia Capital","Ufenau Capital Partners","Deutsche Beteiligungs AG","Bregal Unternehmerkapital","Adiuva Capital","Nordwind Capital","BWK","CornerstoneCapital","Astorius","Elvaston Capital Management","COI Partners","DEDIQ","AdAstra"],
+"US": ["Altamont Capital Partners","NewSpring Capital","Prospect Capital Management","Transom Capital Group","VSS Capital Partners","Align Capital Partners","Source Capital","ShoreView Industries","Baymark Partners","Heritage Holding","Hidden Harbor Capital Partners","Dauntless Capital Partners","Pfingsten Partners","Rockwood Equity Partners","Gauge Capital","Portrait Capital","Sleeping Giant Capital","JLL Partners","H.I.G. Capital","Littlejohn & Co.","Angelo Gordon","Bruckmann Rosser Sherrill & Co.","Freeman Spogli & Co.","J.H. Whitney & Company","J.W. Childs Associates","Thomas H. Lee Partners","Yucaipa Companies","L Catterton","Insight Partners","TA Associates","The Riverside Company"],
+"Benelux": ["Bencis Capital Partners","Egeria","Avedon Capital Partners","Waterland Private Equity","Gilde Equity Management","Gilde Healthcare","Rivean Capital","Main Capital Partners","Mentha Capital","Sofindev","Plain Vanilla Investments","Bolster Investment Partners","Holland Capital","Standard Investment","IceLake Capital","PMH Investments","Pride Capital Partners","Airbridge Equity Partners"],
+"Nordics": ["Accent Equity Partners","Amplio Private Equity","Segulah","MVI Advisors","Verdane","Nordic Capital","Altor Equity Partners","EQT","Triton Partners","FSN Capital","Polaris Private Equity","Axcel","GRO Capital","Summa Equity","Cubera","IK Partners"],
+"Iberia": ["Magnum Industrial Partners","Portobello Capital","Miura Partners","Asterion Industrial Partners","Alantra Private Equity","ProA Capital","Buenavista Equity Partners (GED Capital)","Nazca Capital","Realza Capital","Espiga Capital","Talde","Aurica Capital","Black Toro Capital","Suma Capital","Sherpa Capital","Diana Capital","MCH Private Equity","Arta Capital","Alter Capital","Explorer Investments","Crescent","ECS Capital","Inter-Risco","Vallis Capital Partners","Iberis Capital","Oxy Capital","Atena Equity Partners","HCapital"],
+"Italy": ["Investindustrial","FSI SGR","Clessidra Private Equity","Xenon Private Equity","Quadrivio Group","Alpha Private Equity","Alto Partners","Synergo Capital","Assietta Private Equity","Wise Equity","NB Renaissance","Charme Capital Partners","Progressio SGR","Ambienta SGR","Nextalia SGR","Vertis SGR","Aksia Group","ItalGlobal Partners","Equita Private Debt"],
+"Canada": ["Northleaf Capital Partners","Birch Hill Equity Partners","Clairvest Group","TorQuest Partners","Altas Partners","Novacap","ONCAP","Onex","Fulcrum Capital Partners","Ironbridge Equity Partners","Argyle Capital","Parity Capital","CAI Capital Partners","Peloton Capital Management","Sagard Private Equity Canada","Cordiant Capital","Fengate Asset Management","Canadian Business Growth Fund","BMO Capital Partners","OMERS Private Equity","Dawson Partners","PRIVEQ Capital","Tandem Expansion","Catalyst Capital Group","Whitehorse Liquidity Partners","ARC Financial","Azimuth Capital Management","EdgeStone Capital Partners","Fulmer Capital Partners"],
+}
+REGIONS = {n: r for r, names in _REGION_GROUPS.items() for n in names}
+REGION_LIST = list(_REGION_GROUPS.keys()) + ["Other"]
+
+
+def region_for(firm):
+    return REGIONS.get(firm, "Other")
+
+
+PIPELINE_STAGES = ["Not contacted", "Contacted", "Replied", "Meeting", "Won", "Dead"]
+
+
+def dismiss_key(firm, title):
+    return f"{firm}||{_title_key(title)}"
