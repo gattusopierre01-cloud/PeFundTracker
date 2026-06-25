@@ -96,12 +96,25 @@ with st.sidebar:
                    "to switch on auto-save.")
 
     st.divider()
-    st.caption("One-time import / restore from a file:")
+    st.caption("Import funds / restore from a file:")
+    imode = st.radio("When loading a file:",
+                     ["Add funds to my list", "Replace everything (restore backup)"],
+                     key="imode")
     up = st.file_uploader("Import a JSON data file", type="json")
-    if up and st.button("Load file & save to Sheet"):
-        _apply(json.load(up))
-        persist()
-        st.success("Imported.")
+    if up and st.button("Load file"):
+        d = json.load(up)
+        if imode.startswith("Add"):
+            added = 0
+            for n in d.get("funds", []):
+                if n not in st.session_state.funds:
+                    st.session_state.funds.append(n)
+                    added += 1
+            persist()
+            st.success(f"Added {added} new fund(s) to your list.")
+        else:
+            _apply(d)
+            persist()
+            st.success("Restored from backup.")
         st.rerun()
     st.download_button("⬇️ Download a backup copy", _blob(),
                        file_name="fund_tracker_backup.json", mime="application/json")
@@ -331,6 +344,50 @@ with tab_watch:
             st.session_state.funds.append(new.strip())
             persist()
             st.rerun()
+
+    with st.expander("➕ Add many funds at once (paste a list)"):
+        bulk = st.text_area("One fund name per line", key="bulk_add", height=160)
+        if st.button("Add all pasted"):
+            added = 0
+            for line in bulk.splitlines():
+                n = line.strip()
+                if n and n not in st.session_state.funds:
+                    st.session_state.funds.append(n)
+                    added += 1
+            if added:
+                persist()
+            st.success(f"Added {added} new fund(s).")
+            st.rerun()
+
+    with st.expander("🔎 Discover new funds from PE news (best-effort — review before adding)"):
+        st.caption("Scans recent PE deal headlines for fund names not on your list. It's heuristic: "
+                   "it mainly catches names ending in Capital / Partners / Equity, and will include "
+                   "some non-funds. Tick only the real ones.")
+        if st.button("Run discovery scan"):
+            with st.spinner("Scanning PE deal headlines…"):
+                st.session_state.discovered = c.discover_funds(st.session_state.funds)
+        disc = st.session_state.get("discovered", [])
+        if disc:
+            st.write(f"{len(disc)} candidate(s) found — tick the real funds:")
+            picks = []
+            for i, d in enumerate(disc):
+                row = st.columns([1, 5])
+                if row[0].checkbox("add", key=f"disc{i}"):
+                    picks.append(d["name"])
+                row[1].markdown(f"**{d['name']}**  ·  seen {d['n']}×  \n_{d['sample'][:90]}_")
+            if st.button("➕ Add ticked to watchlist"):
+                added = 0
+                for n in picks:
+                    if n not in st.session_state.funds:
+                        st.session_state.funds.append(n)
+                        added += 1
+                if added:
+                    persist()
+                st.session_state.discovered = []
+                st.success(f"Added {added} fund(s) to your watchlist.")
+                st.rerun()
+        elif "discovered" in st.session_state:
+            st.info("No new candidate funds found in the latest headlines.")
     st.caption(f"{len(st.session_state.funds)} funds tracked.")
     for i, firm in enumerate(sorted(st.session_state.funds)):
         col = st.columns([5, 2, 1])
