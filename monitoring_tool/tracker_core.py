@@ -306,4 +306,57 @@ PIPELINE_STAGES = ["Not contacted", "Contacted", "Replied", "Meeting", "Won", "D
 
 def dismiss_key(firm, title):
     return f"{firm}||{_title_key(title)}"
-    
+
+
+# ============================================================================
+#  v4 — best-effort fund discovery from PE deal headlines
+# ============================================================================
+PE_SUFFIXES = ("capital", "partners", "equity", "ventures", "investments",
+               "management", "advisors", "holdings", "group")
+DISCOVER_QUERIES = [
+    "private equity acquires", "private equity invests in", "private equity backs",
+    "buyout firm acquires", "private equity bolt-on", "growth equity invests in",
+]
+_ACTION = re.compile(
+    r"\b(acquires|acquire|invests in|invest in|backs|buys|to acquire|"
+    r"completes acquisition of|takes majority|takes a stake|recapitalises|recapitalizes)\b",
+    re.I)
+
+
+def _extract_candidate(title):
+    """Pull a likely fund name from the start of a deal headline, or None."""
+    core = re.split(r"\s+-\s+[^-]+$", title)[0]          # drop " - Outlet"
+    m = _ACTION.search(core)
+    if not m:
+        return None
+    cand = core[:m.start()].strip(" .,–—-:'\"")
+    words = cand.split()
+    if not (2 <= len(words) <= 6):
+        return None
+    cl = cand.lower()
+    if not any(cl.endswith(s) or (" " + s) in (" " + cl) for s in PE_SUFFIXES):
+        return None
+    return cand
+
+
+def discover_funds(known, max_per_query=40):
+    """Scan PE deal headlines for fund names not already on the watchlist.
+    Heuristic — returns review candidates, not verified funds."""
+    known_l = {k.lower() for k in known}
+    found = {}
+    for q in DISCOVER_QUERIES:
+        url = f"https://news.google.com/rss/search?q={quote_plus(q)}&hl=en-GB&gl=GB&ceid=GB:en"
+        try:
+            feed = feedparser.parse(url)
+        except Exception:
+            continue
+        for e in feed.entries[:max_per_query]:
+            title = getattr(e, "title", "")
+            cand = _extract_candidate(title)
+            if not cand or cand.lower() in known_l:
+                continue
+            key = cand.lower()
+            if key not in found:
+                found[key] = {"name": cand, "n": 0, "sample": title, "source": getattr(e, "link", "")}
+            found[key]["n"] += 1
+    return sorted(found.values(), key=lambda x: (-x["n"], x["name"]))
