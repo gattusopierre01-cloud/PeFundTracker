@@ -2,8 +2,10 @@ import json
 from datetime import date
 import streamlit as st
 import tracker_core as c
+import sheets
 
 st.set_page_config(page_title="MosaiQ Fund Tracker", page_icon="📈", layout="wide")
+USE_SHEETS = sheets.available()
 
 
 def _load_seed():
@@ -15,38 +17,93 @@ def _load_seed():
         return [], []
 
 
-if "funds" not in st.session_state:
-    f, t = _load_seed()
-    st.session_state.funds = f
-    st.session_state.triggers = t
-    st.session_state.candidates = []
-    st.session_state.statuses = {}     # firm -> pipeline stage
-    st.session_state.dismissed = []    # dismiss keys
+def _apply(d):
+    st.session_state.funds = d.get("funds", [])
+    st.session_state.triggers = d.get("triggers", [])
+    st.session_state.statuses = d.get("statuses", {})
+    st.session_state.dismissed = d.get("dismissed", [])
 
-# ---- sidebar: save / load ----
-with st.sidebar:
-    st.header("Your data")
-    st.caption(
-        "Free hosting doesn't keep data between restarts. **Download** to save your log, "
-        "watchlist, statuses and dismissals, and **upload** it next time to pick up where you "
-        "left off."
-    )
-    blob = json.dumps({
+
+def _blob():
+    return json.dumps({
         "funds": st.session_state.funds,
         "triggers": st.session_state.triggers,
         "statuses": st.session_state.statuses,
         "dismissed": st.session_state.dismissed,
-    }, indent=2)
-    st.download_button("⬇️ Download my data", blob, file_name="fund_tracker_data.json", mime="application/json")
-    up = st.file_uploader("⬆️ Load saved data", type="json")
-    if up and st.button("Load this file"):
-        d = json.load(up)
-        st.session_state.funds = d.get("funds", [])
-        st.session_state.triggers = d.get("triggers", [])
-        st.session_state.statuses = d.get("statuses", {})
-        st.session_state.dismissed = d.get("dismissed", [])
-        st.success("Loaded.")
+    }, indent=2, ensure_ascii=False)
+
+
+def persist():
+    """Save to the Google Sheet (no-op if not connected)."""
+    if not (USE_SHEETS and st.session_state.get("sheet_ok")):
+        return
+    try:
+        sheets.save_blob(_blob())
+    except Exception as e:
+        st.warning(f"Couldn't save to Google Sheet: {e}")
+
+
+# ---- one-time load ----
+if "loaded" not in st.session_state:
+    st.session_state.candidates = []
+    st.session_state.sheet_ok = False
+    st.session_state.sheet_err = None
+    if USE_SHEETS:
+        try:
+            raw = sheets.load_blob()
+            if raw:
+                _apply(json.loads(raw))
+            else:
+                f, t = _load_seed()
+                _apply({"funds": f, "triggers": t})
+            st.session_state.sheet_ok = True
+        except Exception as e:
+            st.session_state.sheet_err = str(e)
+            f, t = _load_seed()
+            _apply({"funds": f, "triggers": t})
+    else:
+        f, t = _load_seed()
+        _apply({"funds": f, "triggers": t})
+    st.session_state.loaded = True
+
+# ---- sidebar ----
+with st.sidebar:
+    st.header("Your data")
+    if USE_SHEETS and st.session_state.sheet_ok:
+        st.success("✅ Saving to your Google Sheet automatically.")
+        if st.button("🔄 Reload from Sheet"):
+            try:
+                raw = sheets.load_blob()
+                if raw:
+                    _apply(json.loads(raw))
+                st.success("Reloaded.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Reload failed: {e}")
+        if st.button("💾 Save now"):
+            persist()
+            st.success("Saved.")
+    elif USE_SHEETS and st.session_state.sheet_err:
+        st.error(
+            "⚠️ Google Sheet not connected — using temporary memory (changes won't "
+            f"survive a restart). Reason: {st.session_state.sheet_err}"
+        )
+        st.caption("Usual causes: the Sheets/Drive API isn't enabled, the sheet isn't "
+                   "shared with the robot email as Editor, or the secret is mis-pasted.")
+    else:
+        st.caption("Google Sheet not set up yet — using temporary memory. Add the secret "
+                   "to switch on auto-save.")
+
+    st.divider()
+    st.caption("One-time import / restore from a file:")
+    up = st.file_uploader("Import a JSON data file", type="json")
+    if up and st.button("Load file & save to Sheet"):
+        _apply(json.load(up))
+        persist()
+        st.success("Imported.")
         st.rerun()
+    st.download_button("⬇️ Download a backup copy", _blob(),
+                       file_name="fund_tracker_backup.json", mime="application/json")
     st.divider()
     st.metric("Funds tracked", len(st.session_state.funds))
     st.metric("Signals logged", len(st.session_state.triggers))
@@ -64,13 +121,11 @@ with tab_queue:
     if not rows:
         st.info("No active signals yet. Run a scan or log a signal to populate this.")
     else:
-        # --- filters ---
         regions_present = sorted({c.region_for(r["firm"]) for r in rows})
         fc = st.columns([2, 3, 3])
         tiers_sel = fc[0].multiselect("Tier", ["T1", "T2", "T3"], default=["T1", "T2", "T3"])
         regions_sel = fc[1].multiselect("Region", regions_present, default=regions_present)
         query = fc[2].text_input("Search fund", "").strip().lower()
-
         rows = [r for r in rows
                 if r["tier"] in tiers_sel
                 and c.region_for(r["firm"]) in regions_sel
@@ -93,10 +148,12 @@ with tab_queue:
                         f"**{firm}**  ·  _{c.region_for(firm)}_  ·  score {r['score']}  \n"
                         f"_{r['lead']}_, {r['age_days']}d old{extra}  ·  → {r['receiver']}"
                     )
-                    cur = st.session_state.statuses.get(firm, "Not contacted")
-                    idx = c.PIPELINE_STAGES.index(cur) if cur in c.PIPELINE_STAGES else 0
+                    prev = st.session_state.statuses.get(firm, "Not contacted")
+                    idx = c.PIPELINE_STAGES.index(prev) if prev in c.PIPELINE_STAGES else 0
                     new_status = head[1].selectbox("Status", c.PIPELINE_STAGES, index=idx, key=f"st_{firm}")
-                    st.session_state.statuses[firm] = new_status
+                    if new_status != prev:
+                        st.session_state.statuses[firm] = new_status
+                        persist()
 
                     with st.expander("✉️ Draft outreach + find the contact"):
                         st.text_area(
@@ -163,6 +220,7 @@ with tab_scan:
                 "source": x["source"], "note": x["title"],
             } for x in shown)
             st.session_state.candidates = [x for x in cands if x not in shown]
+            persist()
             st.success(f"Logged {len(shown)} signal(s). Check the Queue tab.")
             st.rerun()
 
@@ -178,6 +236,7 @@ with tab_scan:
                 if top[1].button("✕ dismiss", key=f"dis{i}"):
                     st.session_state.dismissed.append(c.dismiss_key(cand["firm"], cand["title"]))
                     st.session_state.candidates = [x for x in cands if x is not cand]
+                    persist()
                     st.rerun()
                 st.markdown(cand["title"])
                 cc = st.columns([1, 2, 2, 3])
@@ -194,6 +253,7 @@ with tab_scan:
         if st.button("➕ Add ticked to my log"):
             st.session_state.triggers.extend(keep)
             st.session_state.candidates = [x for x in cands if x not in shown]
+            persist()
             st.success(f"Added {len(keep)} signal(s). Check the Queue tab.")
             st.rerun()
 
@@ -204,6 +264,7 @@ with tab_watch:
     if st.button("Add fund") and new.strip():
         if new.strip() not in st.session_state.funds:
             st.session_state.funds.append(new.strip())
+            persist()
             st.rerun()
     st.caption(f"{len(st.session_state.funds)} funds tracked.")
     for i, firm in enumerate(sorted(st.session_state.funds)):
@@ -212,6 +273,7 @@ with tab_watch:
         col[1].caption(c.region_for(firm))
         if col[2].button("remove", key=f"rm{i}"):
             st.session_state.funds.remove(firm)
+            persist()
             st.rerun()
 
 # ---------------- MANUAL LOG ----------------
@@ -230,4 +292,5 @@ with tab_log:
             )
             if firm.strip() not in st.session_state.funds:
                 st.session_state.funds.append(firm.strip())
+            persist()
             st.success(f"Logged: {firm} — {type_labels[ttype]}")
