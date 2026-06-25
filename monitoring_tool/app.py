@@ -1,6 +1,7 @@
 import json
 from datetime import date
 import streamlit as st
+import pandas as pd
 import tracker_core as c
 import sheets
 
@@ -110,8 +111,8 @@ with st.sidebar:
 
 st.title("📈 MosaiQ Fund Tracker")
 
-tab_queue, tab_scan, tab_watch, tab_log = st.tabs(
-    ["🎯 Queue", "🔍 Run a scan", "📋 Watchlist", "✍️ Log a signal"]
+tab_queue, tab_scan, tab_data, tab_watch, tab_log = st.tabs(
+    ["🎯 Queue", "🔍 Run a scan", "📊 Data", "📋 Watchlist", "✍️ Log a signal"]
 )
 
 # ---------------- QUEUE ----------------
@@ -256,6 +257,70 @@ with tab_scan:
             persist()
             st.success(f"Added {len(keep)} signal(s). Check the Queue tab.")
             st.rerun()
+
+# ---------------- DATA (interactive tables) ----------------
+with tab_data:
+    st.subheader("All your data — sort, search, filter")
+    st.caption("Click any column header to sort. Use the search icon in the table toolbar to filter. "
+               "Edit funds/signals on the other tabs; this is your read-only overview.")
+
+    from collections import defaultdict
+    sig_by_firm = defaultdict(list)
+    for t in st.session_state.triggers:
+        sig_by_firm[t["firm"]].append(t)
+
+    # --- Funds table ---
+    st.markdown("#### Funds")
+    fcol = st.columns([3, 3, 3])
+    regions_all = sorted({c.region_for(f) for f in st.session_state.funds}) or ["Other"]
+    reg_sel = fcol[0].multiselect("Region", regions_all, default=regions_all, key="data_reg")
+    stat_sel = fcol[1].multiselect("Status", c.PIPELINE_STAGES, default=c.PIPELINE_STAGES, key="data_stat")
+    fsearch = fcol[2].text_input("Search fund name", "", key="data_fsearch").strip().lower()
+
+    fund_rows = []
+    for f in st.session_state.funds:
+        sigs = sig_by_firm.get(f, [])
+        latest = max(sigs, key=lambda x: x["date"]) if sigs else None
+        status = st.session_state.statuses.get(f, "Not contacted")
+        fund_rows.append({
+            "Firm": f,
+            "Region": c.region_for(f),
+            "Status": status,
+            "Signals": len(sigs),
+            "Latest signal": c.TRIGGER_TYPES.get(latest["type"], {}).get("label", "") if latest else "",
+            "Latest date": latest["date"] if latest else "",
+        })
+    fdf = pd.DataFrame(fund_rows)
+    if not fdf.empty:
+        fdf = fdf[fdf["Region"].isin(reg_sel) & fdf["Status"].isin(stat_sel)]
+        if fsearch:
+            fdf = fdf[fdf["Firm"].str.lower().str.contains(fsearch)]
+        fdf = fdf.sort_values(["Signals", "Firm"], ascending=[False, True])
+    st.dataframe(fdf, use_container_width=True, hide_index=True)
+    st.caption(f"{len(fdf)} of {len(st.session_state.funds)} funds shown.")
+    if not fdf.empty:
+        st.download_button("⬇️ Download funds as CSV", fdf.to_csv(index=False),
+                           file_name="funds.csv", mime="text/csv")
+
+    st.divider()
+
+    # --- Signals table ---
+    st.markdown("#### Signals logged")
+    sig_rows = []
+    for t in sorted(st.session_state.triggers, key=lambda x: x["date"], reverse=True):
+        sig_rows.append({
+            "Firm": t["firm"],
+            "Region": c.region_for(t["firm"]),
+            "Signal": c.TRIGGER_TYPES.get(t["type"], {}).get("label", t["type"]),
+            "Date": t["date"],
+            "Source / note": t.get("note") or t.get("source") or "",
+        })
+    sdf = pd.DataFrame(sig_rows)
+    st.dataframe(sdf, use_container_width=True, hide_index=True)
+    st.caption(f"{len(sdf)} signal(s) logged.")
+    if not sdf.empty:
+        st.download_button("⬇️ Download signals as CSV", sdf.to_csv(index=False),
+                           file_name="signals.csv", mime="text/csv")
 
 # ---------------- WATCHLIST ----------------
 with tab_watch:
