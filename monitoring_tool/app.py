@@ -120,6 +120,17 @@ with st.sidebar:
         st.rerun()
     st.download_button("⬇️ Download a backup copy", _blob(),
                        file_name="fund_tracker_backup.json", mime="application/json")
+
+    with st.expander("🧹 Clear logged signals"):
+        st.caption("Removes all logged signals (keeps your funds and statuses). "
+                   "Use this to wipe a noisy batch and re-scan clean.")
+        sure = st.checkbox("Yes, clear all logged signals", key="clear_sure")
+        if st.button("Clear now", disabled=not sure):
+            st.session_state.triggers = []
+            persist()
+            st.success("Cleared all logged signals.")
+            st.rerun()
+
     st.divider()
     st.metric("Funds tracked", len(st.session_state.funds))
     st.metric("Signals logged", len(st.session_state.triggers))
