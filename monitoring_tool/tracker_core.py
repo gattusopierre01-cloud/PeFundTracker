@@ -28,7 +28,7 @@ SCAN_KEYWORDS = [
     ("add_on",            ["add-on", "bolt-on", "add on", "bolt on", "buy-and-build", "buy and build"]),
     ("new_op_hire",       ["operating partner", "head of value creation", "value creation partner", "chief operating partner"]),
     ("new_platform",      ["acquires", "acquisition of", "majority stake", "majority investment", "takes majority",
-                           "invests in", "investment in", "backs", "take-private", "to take private", "take private",
+                           "buyout of", "take-private", "to take private", "take private",
                            "recapitalis", "recapitaliz", "carve-out", "carve out"]),
     ("fund_close",        ["closes fund", "final close", "holds final close", "raises new fund", "new fund",
                            "oversubscribed", "hard cap", "fund close", "closes its fund"]),
@@ -150,6 +150,15 @@ def dedupe_candidates(cands):
     return out
 
 
+def _is_actor(title, firm):
+    """True only if the headline STARTS with the fund name (fund is the doer),
+    not merely mentions it. Big precision lever against false positives."""
+    core = re.split(r"\s+-\s+[^-]+$", title)[0]
+    core = re.sub(r"^(exclusive|breaking|update|just in)\s*[:\-]\s*", "", core, flags=re.I)
+    core = core.strip(" \"'\u2018\u2019\u201c\u201d")
+    return core.lower().startswith(firm.lower())
+
+
 def scan_fund(firm, max_items=10):
     q = quote_plus(f'"{firm}" (acquires OR invests OR appoints OR "operating partner" OR raises OR "bolt-on" OR sells)')
     url = f"https://news.google.com/rss/search?q={q}&hl=en-GB&gl=GB&ceid=GB:en"
@@ -158,7 +167,7 @@ def scan_fund(firm, max_items=10):
     for e in feed.entries[:max_items]:
         title = getattr(e, "title", "")
         ttype, label = guess_type(title)
-        if not ttype:
+        if not ttype or not _is_actor(title, firm):
             continue
         try:
             pub = datetime(*e.published_parsed[:6]).date().isoformat()
@@ -199,7 +208,7 @@ def scan_trade_press(funds, max_per_feed=60):
             title = getattr(e, "title", "")
             low = title.lower()
             hit = next((f for f, fl in names if fl in low), None)
-            if not hit:
+            if not hit or not _is_actor(title, hit):
                 continue
             ttype, label = guess_type(title)
             if not ttype:
