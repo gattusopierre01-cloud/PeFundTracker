@@ -24,6 +24,7 @@ def _apply(d):
     st.session_state.statuses = d.get("statuses", {})
     st.session_state.dismissed = d.get("dismissed", [])
     st.session_state.status_log = d.get("status_log", {})
+    st.session_state.aum = d.get("aum", {})
 
 
 def _blob():
@@ -33,6 +34,7 @@ def _blob():
         "statuses": st.session_state.statuses,
         "dismissed": st.session_state.dismissed,
         "status_log": st.session_state.status_log,
+        "aum": st.session_state.aum,
     }, indent=2, ensure_ascii=False)
 
 
@@ -111,6 +113,8 @@ with st.sidebar:
                 if n not in st.session_state.funds:
                     st.session_state.funds.append(n)
                     added += 1
+            for k, v in d.get("aum", {}).items():
+                st.session_state.aum[k] = v
             persist()
             st.success(f"Added {added} new fund(s) to your list.")
         else:
@@ -167,10 +171,22 @@ with tab_queue:
         tiers_sel = fc[0].multiselect("Tier", ["T1", "T2", "T3"], default=["T1", "T2", "T3"])
         regions_sel = fc[1].multiselect("Region", regions_present, default=regions_present)
         query = fc[2].text_input("Search fund", "").strip().lower()
+        ac = st.columns([2, 3])
+        use_aum = ac[0].checkbox("Filter by AUM", value=False, key="q_use_aum")
+        max_aum = ac[1].number_input("Hide funds over (bn)", value=15.0, step=1.0,
+                                     key="q_max_aum", disabled=not use_aum)
+
+        def _aum_ok(firm):
+            if not use_aum:
+                return True
+            rec = st.session_state.aum.get(firm)
+            return (rec is None) or (rec <= max_aum)
+
         rows = [r for r in rows
                 if r["tier"] in tiers_sel
                 and c.region_for(r["firm"]) in regions_sel
-                and (query in r["firm"].lower() if query else True)]
+                and (query in r["firm"].lower() if query else True)
+                and _aum_ok(r["firm"])]
         if not rows:
             st.warning("No funds match these filters.")
 
@@ -333,6 +349,7 @@ with tab_data:
         fund_rows.append({
             "Firm": f,
             "Region": c.region_for(f),
+            "AUM (bn)": st.session_state.aum.get(f, ""),
             "Status": status,
             "Signals": len(sigs),
             "Latest signal": c.TRIGGER_TYPES.get(latest["type"], {}).get("label", "") if latest else "",
@@ -407,13 +424,33 @@ with tab_watch:
             st.success(f"Added {added} new fund(s).")
             st.rerun()
 
+    with st.expander("💰 Set / edit a fund's AUM (billions)"):
+        st.caption("AUM isn't auto-fetchable, so record it here (or import a populated file). "
+                   "Currency-agnostic — a rough billions figure is fine. 0 = clear/unknown.")
+        if st.session_state.funds:
+            af = st.selectbox("Fund", sorted(st.session_state.funds), key="aum_fund")
+            cur = st.session_state.aum.get(af)
+            val = st.number_input("AUM (bn)", min_value=0.0, step=0.5,
+                                  value=float(cur) if isinstance(cur, (int, float)) else 0.0,
+                                  key="aum_val")
+            if st.button("Save AUM"):
+                if val and val > 0:
+                    st.session_state.aum[af] = val
+                else:
+                    st.session_state.aum.pop(af, None)
+                persist()
+                st.success(f"Saved AUM for {af}.")
+                st.rerun()
+
     with st.expander("🔎 Discover new funds from PE news (best-effort — review before adding)"):
         st.caption("Scans recent PE deal headlines for fund names not on your list. It's heuristic: "
                    "it mainly catches names ending in Capital / Partners / Equity, and will include "
-                   "some non-funds. Tick only the real ones.")
+                   "some non-funds. Tick only the real ones. Known mega-funds (KKR, Blackstone, "
+                   "Permira, etc.) and anything you've recorded as over 15bn are excluded.")
         if st.button("Run discovery scan"):
             with st.spinner("Scanning PE deal headlines…"):
-                st.session_state.discovered = c.discover_funds(st.session_state.funds)
+                st.session_state.discovered = c.discover_funds(
+                    st.session_state.funds, aum=st.session_state.aum, max_aum=15.0)
         disc = st.session_state.get("discovered", [])
         if disc:
             st.write(f"{len(disc)} candidate(s) found — tick the real funds:")
