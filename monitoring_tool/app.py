@@ -23,6 +23,7 @@ def _apply(d):
     st.session_state.triggers = d.get("triggers", [])
     st.session_state.statuses = d.get("statuses", {})
     st.session_state.dismissed = d.get("dismissed", [])
+    st.session_state.status_log = d.get("status_log", {})
 
 
 def _blob():
@@ -31,6 +32,7 @@ def _blob():
         "triggers": st.session_state.triggers,
         "statuses": st.session_state.statuses,
         "dismissed": st.session_state.dismissed,
+        "status_log": st.session_state.status_log,
     }, indent=2, ensure_ascii=False)
 
 
@@ -122,6 +124,20 @@ with st.sidebar:
     st.metric("Funds tracked", len(st.session_state.funds))
     st.metric("Signals logged", len(st.session_state.triggers))
 
+def fund_timeline(firm):
+    """All signals + status changes for a fund, newest first."""
+    items = []
+    for t in st.session_state.triggers:
+        if t["firm"] == firm:
+            label = c.TRIGGER_TYPES.get(t["type"], {}).get("label", t["type"])
+            note = f" — {t['note']}" if t.get("note") else ""
+            items.append({"date": t["date"], "kind": "signal", "text": label + note})
+    for e in st.session_state.get("status_log", {}).get(firm, []):
+        items.append({"date": e["date"], "kind": "status", "text": f"Status → {e['stage']}"})
+    items.sort(key=lambda x: x["date"], reverse=True)
+    return items
+
+
 st.title("📈 MosaiQ Fund Tracker")
 
 tab_queue, tab_scan, tab_data, tab_watch, tab_log = st.tabs(
@@ -167,6 +183,8 @@ with tab_queue:
                     new_status = head[1].selectbox("Status", c.PIPELINE_STAGES, index=idx, key=f"st_{firm}")
                     if new_status != prev:
                         st.session_state.statuses[firm] = new_status
+                        st.session_state.status_log.setdefault(firm, []).append(
+                            {"stage": new_status, "date": date.today().isoformat()})
                         persist()
 
                     with st.expander("✉️ Draft outreach + find the contact"):
@@ -180,6 +198,12 @@ with tab_queue:
                             f"&nbsp;·&nbsp;  [📅 Your Calendly]({c.CALENDLY})"
                         )
                         st.caption("Swap “[first name]” for the contact and “[Loom: 90-sec demo]” for your Loom link.")
+                        tl = fund_timeline(firm)
+                        if tl:
+                            st.markdown("**📈 Timeline (heating up?)**")
+                            for h in tl:
+                                icon = "📰" if h["kind"] == "signal" else "✅"
+                                st.markdown(f"{icon}  `{h['date']}`  {h['text']}")
 
 # ---------------- SCAN ----------------
 with tab_scan:
@@ -334,6 +358,19 @@ with tab_data:
     if not sdf.empty:
         st.download_button("⬇️ Download signals as CSV", sdf.to_csv(index=False),
                            file_name="signals.csv", mime="text/csv")
+
+    st.divider()
+    st.markdown("#### Fund history")
+    st.caption("Pick any fund to see its full timeline of signals and status changes.")
+    if st.session_state.funds:
+        who = st.selectbox("Fund", sorted(st.session_state.funds), key="hist_pick")
+        tl = fund_timeline(who)
+        if tl:
+            for h in tl:
+                icon = "📰" if h["kind"] == "signal" else "✅"
+                st.markdown(f"{icon}  `{h['date']}`  {h['text']}")
+        else:
+            st.info("No signals or status changes recorded for this fund yet.")
 
 # ---------------- WATCHLIST ----------------
 with tab_watch:
