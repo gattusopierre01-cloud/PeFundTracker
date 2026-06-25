@@ -2,3 +2,4 @@ streamlit
 feedparser
 gspread
 google-auth
+pandas
