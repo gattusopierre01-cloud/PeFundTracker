@@ -348,9 +348,29 @@ def _extract_candidate(title):
     return cand
 
 
-def discover_funds(known, max_per_query=40):
+# Unambiguous global mega-funds (AUM far above 15bn) — never suggest these in
+# discovery. Conservative: clear giants only, no borderline European mid-caps.
+MEGA_EXCLUDE = {
+    "kkr", "blackstone", "carlyle", "the carlyle group", "apollo", "apollo global",
+    "eqt", "cvc", "cvc capital partners", "advent international", "advent",
+    "bain capital", "tpg", "tpg capital", "warburg pincus", "permira", "ardian",
+    "cinven", "hellman & friedman", "hellman and friedman", "vista equity partners",
+    "thoma bravo", "brookfield", "general atlantic", "silver lake", "leonard green",
+    "clayton dubilier & rice", "cd&r", "bc partners", "hg", "hg capital",
+    "francisco partners", "providence equity", "insight partners", "l catterton",
+}
+
+
+def _is_mega(name):
+    n = name.lower()
+    return any(n == m or n.startswith(m + " ") for m in MEGA_EXCLUDE)
+
+
+def discover_funds(known, aum=None, max_aum=15.0, max_per_query=40):
     """Scan PE deal headlines for fund names not already on the watchlist.
+    Excludes known mega-funds and any candidate recorded as larger than max_aum (bn).
     Heuristic — returns review candidates, not verified funds."""
+    aum = aum or {}
     known_l = {k.lower() for k in known}
     found = {}
     for q in DISCOVER_QUERIES:
@@ -362,7 +382,10 @@ def discover_funds(known, max_per_query=40):
         for e in feed.entries[:max_per_query]:
             title = getattr(e, "title", "")
             cand = _extract_candidate(title)
-            if not cand or cand.lower() in known_l:
+            if not cand or cand.lower() in known_l or _is_mega(cand):
+                continue
+            rec = aum.get(cand)
+            if isinstance(rec, (int, float)) and rec > max_aum:
                 continue
             key = cand.lower()
             if key not in found:
