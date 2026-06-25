@@ -442,6 +442,26 @@ with tab_watch:
                 st.success(f"Saved AUM for {af}.")
                 st.rerun()
 
+        st.divider()
+        st.markdown("**Auto-fetch from Wikidata (best-effort)**")
+        st.caption("Free, but partial — covers mostly larger funds, figures can be dated, "
+                   "and an occasional same-name mismatch slips in. Review what it fills.")
+        only_missing = st.checkbox("Only funds without an AUM yet", value=True, key="wd_only")
+        if st.button("🔎 Auto-fetch AUM from Wikidata"):
+            with st.spinner("Querying Wikidata — this can take a minute or two…"):
+                skip = set(st.session_state.aum.keys()) if only_missing else set()
+                got = c.fetch_aum_wikidata(st.session_state.funds, skip=skip)
+            for f, info in got.items():
+                st.session_state.aum[f] = info["aum_bn"]
+            persist()
+            st.success(f"Filled AUM for {len(got)} fund(s) from Wikidata — saved. "
+                       "Please eyeball the values below; fix any that look off with the editor above.")
+            if got:
+                st.dataframe(
+                    pd.DataFrame([{"Firm": f, "AUM (bn)": i["aum_bn"], "Currency": i["currency"]}
+                                 for f, i in got.items()]),
+                    use_container_width=True, hide_index=True)
+
     with st.expander("🔎 Discover new funds from PE news (best-effort — review before adding)"):
         st.caption("Scans recent PE deal headlines for fund names not on your list. It's heuristic: "
                    "it mainly catches names ending in Capital / Partners / Equity, and will include "
