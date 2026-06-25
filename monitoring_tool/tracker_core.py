@@ -306,3 +306,4 @@ PIPELINE_STAGES = ["Not contacted", "Contacted", "Replied", "Meeting", "Won", "D
 
 def dismiss_key(firm, title):
     return f"{firm}||{_title_key(title)}"
+    
