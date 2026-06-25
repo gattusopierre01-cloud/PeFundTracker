@@ -392,3 +392,73 @@ def discover_funds(known, aum=None, max_aum=15.0, max_per_query=40):
                 found[key] = {"name": cand, "n": 0, "sample": title, "source": getattr(e, "link", "")}
             found[key]["n"] += 1
     return sorted(found.values(), key=lambda x: (-x["n"], x["name"]))
+
+
+# ============================================================================
+#  v5 — best-effort automated AUM lookup via Wikidata (free, partial coverage)
+# ============================================================================
+import urllib.request as _urlreq
+import urllib.parse as _urlparse
+
+_WD_API = "https://www.wikidata.org/w/api.php"
+_WD_UA = {"User-Agent": "MosaiQ-Fund-Tracker/1.0"}
+_AUM_PROP = "P2403"                       # Wikidata "assets under management"
+_WD_CUR = {"Q4917": "USD", "Q4916": "EUR", "Q25224": "GBP", "Q4726": "JPY"}
+_WD_DESC_HINTS = ("private equity", "investment", "asset management", "venture",
+                  "buyout", "equity firm", "capital", "investment firm", "private-equity")
+
+
+def _wd_get(params):
+    url = _WD_API + "?" + _urlparse.urlencode({**params, "format": "json"})
+    req = _urlreq.Request(url, headers=_WD_UA)
+    with _urlreq.urlopen(req, timeout=15) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def _wd_entity_for(name):
+    """Find a Wikidata entity id for a fund name; only accept finance-looking ones."""
+    data = _wd_get({"action": "wbsearchentities", "search": name,
+                    "language": "en", "type": "item", "limit": 5})
+    for hit in data.get("search", []):
+        desc = (hit.get("description") or "").lower()
+        if any(h in desc for h in _WD_DESC_HINTS):
+            return hit["id"]
+    return None
+
+
+def _parse_aum_claims(claims):
+    """Return (aum_in_billions, currency) from P2403 claims, or None."""
+    for cl in claims:
+        try:
+            val = cl["mainsnak"]["datavalue"]["value"]
+            amt = float(val["amount"])
+            unit_q = val.get("unit", "").rsplit("/", 1)[-1]
+            return round(amt / 1e9, 2), _WD_CUR.get(unit_q, "")
+        except Exception:
+            continue
+    return None
+
+
+def fetch_aum_wikidata(funds, skip=None, cap=300):
+    """Best-effort AUM (billions) from Wikidata. Partial coverage (mostly larger
+    funds); figures can be dated; confirm values before trusting them.
+    Returns {fund: {"aum_bn": float, "currency": str, "entity": qid}}."""
+    import time
+    skip = skip or set()
+    out, n = {}, 0
+    for f in funds:
+        if f in skip or n >= cap:
+            continue
+        n += 1
+        try:
+            qid = _wd_entity_for(f)
+            if not qid:
+                continue
+            data = _wd_get({"action": "wbgetclaims", "entity": qid, "property": _AUM_PROP})
+            parsed = _parse_aum_claims(data.get("claims", {}).get(_AUM_PROP, []))
+            if parsed:
+                out[f] = {"aum_bn": parsed[0], "currency": parsed[1], "entity": qid}
+        except Exception:
+            continue
+        time.sleep(0.1)
+    return out
