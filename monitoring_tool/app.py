@@ -71,8 +71,9 @@ with tab_queue:
 with tab_scan:
     st.subheader("On-demand scan")
     st.caption(
-        "Checks each fund on your watchlist against free Google News results and surfaces "
-        "candidate signals. Nothing is logged until you confirm it. "
+        "Scans each fund against free Google News, then auto-screens: it collapses the "
+        "same deal reported by several outlets into one, drops articles that only mention a "
+        "fund, and surfaces the strong signals first. You confirm a short list, not hundreds. "
         "(The live check only works on the deployed app, not in a preview.)"
     )
     if st.button("🔍 Run scan on my watchlist", type="primary"):
@@ -88,22 +89,43 @@ with tab_scan:
                     st.write(f"⚠️ couldn't scan {firm}: {e}")
                 prog.progress(i / len(st.session_state.funds), f"Scanning… {firm}")
             prog.empty()
-            # drop candidates already logged (same firm+date+type)
             seen = {(t["firm"], t["date"], t["type"]) for t in st.session_state.triggers}
-            st.session_state.candidates = [
-                x for x in found if (x["firm"], x["date"], x["suggested_type"]) not in seen
-            ]
-            st.success(f"Found {len(st.session_state.candidates)} candidate signal(s) to review.")
+            raw = [x for x in found if (x["firm"], x["date"], x["suggested_type"]) not in seen]
+            st.session_state.candidates = c.dedupe_candidates(raw)
+            n_strong = sum(1 for x in st.session_state.candidates if x["is_strong"])
+            st.success(
+                f"Screened {len(found)} raw hits → {len(st.session_state.candidates)} distinct signals "
+                f"({n_strong} strong)."
+            )
 
     if st.session_state.candidates:
-        st.markdown("#### Review candidates — tick the real ones, then add")
+        cands = st.session_state.candidates
+        n_strong = sum(1 for x in cands if x["is_strong"])
+        n_weak = len(cands) - n_strong
+        st.markdown("#### Review — strong signals are pre-ticked")
+        show_weak = st.checkbox(f"Also show {n_weak} weaker signal(s)", value=False)
+        shown = [x for x in cands if x["is_strong"] or show_weak]
+
+        if st.button(f"✅ Accept all {len(shown)} shown", type="primary"):
+            st.session_state.triggers.extend({
+                "firm": x["firm"], "type": x["suggested_type"], "date": x["date"],
+                "source": x["source"], "note": x["title"],
+            } for x in shown)
+            st.session_state.candidates = [x for x in cands if x not in shown]
+            st.success(f"Logged {len(shown)} signal(s). Check the Queue tab.")
+            st.rerun()
+
+        st.caption("…or fine-tune below and add only the ticked ones.")
         type_labels = {k: v["label"] for k, v in c.TRIGGER_TYPES.items()}
         keep = []
-        for i, cand in enumerate(st.session_state.candidates):
+        for i, cand in enumerate(shown):
             with st.container(border=True):
-                st.markdown(f"**{cand['firm']}** — {cand['title']}")
+                badge = "🟢 strong" if cand["is_strong"] else "⚪️ weak"
+                extra = f" · {cand['n_headlines']} headlines merged" if cand["n_headlines"] > 1 else ""
+                st.markdown(f"**{cand['firm']}** &nbsp;·&nbsp; {badge}{extra}")
+                st.markdown(cand["title"])
                 cc = st.columns([1, 2, 2, 3])
-                take = cc[0].checkbox("Log it", key=f"k{i}")
+                take = cc[0].checkbox("Log it", value=cand["is_strong"], key=f"k{i}")
                 ttype = cc[1].selectbox(
                     "Type", list(type_labels), index=list(type_labels).index(cand["suggested_type"]),
                     format_func=lambda k: type_labels[k], key=f"t{i}",
@@ -113,9 +135,9 @@ with tab_scan:
                 if take:
                     keep.append({"firm": cand["firm"], "type": ttype, "date": dt,
                                  "source": cand["source"], "note": cand["title"]})
-        if st.button("➕ Add selected to my log"):
+        if st.button("➕ Add ticked to my log"):
             st.session_state.triggers.extend(keep)
-            st.session_state.candidates = []
+            st.session_state.candidates = [x for x in cands if x not in shown]
             st.success(f"Added {len(keep)} signal(s). Check the Queue tab.")
             st.rerun()
 
