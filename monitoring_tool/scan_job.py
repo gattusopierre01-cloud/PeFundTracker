@@ -1,6 +1,6 @@
 """Headless daily scan for the MosaiQ Fund Tracker.
 Runs on a schedule via GitHub Actions: reads the Google Sheet, scans every fund,
-auto-logs new STRONG signals back to the Sheet, and emails a digest.
+auto-logs new fresh STRONG signals back to the Sheet (capped), and emails a digest.
 Credentials come from environment variables (GitHub Actions secrets), never the repo.
 """
 import os
@@ -17,6 +17,7 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets",
           "https://www.googleapis.com/auth/drive"]
 DATA_WS = "data"
 CHUNK = 45000
+MAX_AUTOLOG = 25          # never auto-log more than this per run
 APP_URL = "https://pefundtracker-uy3sarfbvtgudjq7dhxbyy.streamlit.app"
 
 
@@ -72,10 +73,17 @@ def build_digest(rows, n_new):
         out.append(f"=== {tier} — {c.TIER_ACTION[tier]} ===")
         for r in tr[:15]:
             out.append(f"• {r['firm']} ({c.region_for(r['firm'])}) — "
-                       f"{r['lead']}, {r['age_days']}d old  →  {r['receiver']}")
+                       f"{r['lead']}, {r['age_days']}d old  ->  {r['receiver']}")
         out.append("")
     out.append(f"Open the tracker to draft outreach / confirm / dismiss:\n{APP_URL}")
     return "\n".join(out)
+
+
+def _age(d):
+    try:
+        return (datetime.date.today() - datetime.date.fromisoformat(d)).days
+    except Exception:
+        return 999
 
 
 def main():
@@ -103,19 +111,27 @@ def main():
     raw = [x for x in found
            if (x["firm"], x["date"], x["suggested_type"]) not in logged
            and c.dismiss_key(x["firm"], x["title"]) not in dismissed]
-    new_strong = [x for x in c.dedupe_candidates(raw) if x["is_strong"]]
+    strong = [x for x in c.dedupe_candidates(raw) if x["is_strong"]]
 
-    for x in new_strong:
+    # only auto-log genuinely fresh signals, and cap the count
+    fresh = [x for x in strong if _age(x["date"]) <= c.FRESH_DAYS]
+    to_log = fresh[:MAX_AUTOLOG]
+    overflow = len(strong) - len(to_log)
+
+    for x in to_log:
         triggers.append({"firm": x["firm"], "type": x["suggested_type"],
                          "date": x["date"], "source": x["source"], "note": x["title"]})
     data["triggers"] = triggers
     save_data(sh, data)
-    print(f"{len(new_strong)} new strong signal(s) logged to the sheet.")
+    print(f"{len(to_log)} new signal(s) logged (of {len(strong)} strong candidates).")
 
     rows = c.build_queue(funds, triggers)
-    body = build_digest(rows, len(new_strong))
+    body = build_digest(rows, len(to_log))
+    if overflow > 0:
+        body += (f"\n\n({overflow} more candidate signal(s) found but not auto-logged — "
+                 f"open the app's Scan tab to review and add them.)")
     try:
-        send_email(f"MosaiQ Fund Tracker — {len(new_strong)} new signal(s)", body)
+        send_email(f"MosaiQ Fund Tracker — {len(to_log)} new signal(s)", body)
         print("digest email sent.")
     except Exception as e:
         print(f"email failed: {e}")
