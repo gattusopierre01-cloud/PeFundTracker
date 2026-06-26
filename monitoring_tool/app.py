@@ -38,6 +38,25 @@ def _blob():
     }, indent=2, ensure_ascii=False)
 
 
+import re as _re
+_SUFFIX_RE = _re.compile(r'\b(llp|llc|inc|gmbh|ag|sgr|spa|plc|kgaa|sa|bv|nv|kg|co)\b')
+
+
+def _norm_name(s):
+    """Normalize a fund name for duplicate detection: lowercase, drop punctuation
+    and common legal suffixes, collapse spaces. So 'Blackfin Capital Partners' and
+    'BlackFin' won't both get added."""
+    s = (s or "").lower().replace("&", "and")
+    s = _re.sub(r'[^a-z0-9 ]', ' ', s)
+    s = _SUFFIX_RE.sub(' ', s)
+    return _re.sub(r'\s+', ' ', s).strip()
+
+
+def _fund_exists(name):
+    n = _norm_name(name)
+    return n != "" and any(_norm_name(f) == n for f in st.session_state.funds)
+
+
 def persist():
     """Save to the Google Sheet (no-op if not connected)."""
     if not (USE_SHEETS and st.session_state.get("sheet_ok")):
@@ -110,8 +129,8 @@ with st.sidebar:
         if imode.startswith("Add"):
             added = 0
             for n in d.get("funds", []):
-                if n not in st.session_state.funds:
-                    st.session_state.funds.append(n)
+                if n and not _fund_exists(n):
+                    st.session_state.funds.append(n.strip())
                     added += 1
             for k, v in d.get("aum", {}).items():
                 st.session_state.aum[k] = v
@@ -405,10 +424,12 @@ with tab_watch:
     st.subheader("Funds you track")
     new = st.text_input("Add a fund")
     if st.button("Add fund") and new.strip():
-        if new.strip() not in st.session_state.funds:
+        if not _fund_exists(new):
             st.session_state.funds.append(new.strip())
             persist()
             st.rerun()
+        else:
+            st.info(f"{new.strip()} is already on your list.")
 
     with st.expander("➕ Add many funds at once (paste a list)"):
         bulk = st.text_area("One fund name per line", key="bulk_add", height=160)
@@ -416,7 +437,7 @@ with tab_watch:
             added = 0
             for line in bulk.splitlines():
                 n = line.strip()
-                if n and n not in st.session_state.funds:
+                if n and not _fund_exists(n):
                     st.session_state.funds.append(n)
                     added += 1
             if added:
@@ -483,7 +504,7 @@ with tab_watch:
             if st.button("➕ Add ticked to watchlist"):
                 added = 0
                 for n in picks:
-                    if n not in st.session_state.funds:
+                    if not _fund_exists(n):
                         st.session_state.funds.append(n)
                         added += 1
                 if added:
@@ -517,7 +538,7 @@ with tab_log:
             st.session_state.triggers.append(
                 {"firm": firm.strip(), "type": ttype, "date": dt, "source": src, "note": note}
             )
-            if firm.strip() not in st.session_state.funds:
+            if not _fund_exists(firm):
                 st.session_state.funds.append(firm.strip())
             persist()
             st.success(f"Logged: {firm} — {type_labels[ttype]}")
