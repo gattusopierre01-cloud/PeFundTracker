@@ -278,16 +278,36 @@ OUTREACH = {
 }
 
 
-def draft_outreach(firm, ttype, headline=""):
+def draft_outreach(firm, ttype, headline="", first="[first name]"):
     tmpl = OUTREACH.get(ttype, OUTREACH["_default"])
-    return tmpl.format(first="[first name]", firm=firm,
+    return tmpl.format(first=first or "[first name]", firm=firm,
                        headline=headline or "recent news", calendly=CALENDLY)
 
 
-def linkedin_people_url(firm):
+# The people MosaiQ should reach at a fund: value-creation / operations decision-makers.
+CONTACT_ROLES = "value creation operating partner portfolio operations COO"
+
+
+def linkedin_people_url(firm, roles=CONTACT_ROLES):
+    """Public LinkedIn people search, pre-filtered to the fund + the relevant roles."""
     from urllib.parse import quote_plus as _q
     return ("https://www.linkedin.com/search/results/people/?keywords="
-            + _q(f'{firm} operating partner'))
+            + _q(f'"{firm}" {roles}'))
+
+
+def sales_nav_people_url(firm, roles=CONTACT_ROLES):
+    """Sales Navigator people search (opens in the user's Sales Nav seat)."""
+    from urllib.parse import quote_plus as _q
+    return ("https://www.linkedin.com/sales/search/people?keywords="
+            + _q(f'"{firm}" {roles}'))
+
+
+def google_contact_url(firm):
+    """Google fallback — often surfaces the exact profile as the top hit."""
+    from urllib.parse import quote_plus as _q
+    return ("https://www.google.com/search?q="
+            + _q(f'{firm} (head of value creation OR operating partner OR '
+                 f'portfolio director OR head of operations) LinkedIn'))
 
 
 # --- Region map (reuses the 240-fund master list as the single source) ------
