@@ -25,6 +25,7 @@ def _apply(d):
     st.session_state.dismissed = d.get("dismissed", [])
     st.session_state.status_log = d.get("status_log", {})
     st.session_state.aum = d.get("aum", {})
+    st.session_state.contacts = d.get("contacts", {})
 
 
 def _blob():
@@ -35,6 +36,7 @@ def _blob():
         "dismissed": st.session_state.dismissed,
         "status_log": st.session_state.status_log,
         "aum": st.session_state.aum,
+        "contacts": st.session_state.contacts,
     }, indent=2, ensure_ascii=False)
 
 
@@ -234,16 +236,48 @@ with tab_queue:
                         persist()
 
                     with st.expander("✉️ Draft outreach + find the contact"):
+                        contact = st.session_state.contacts.get(firm)
+                        first = (contact["name"].split()[0]
+                                 if contact and contact.get("name") else "[first name]")
                         st.text_area(
                             "Email draft (edit, then copy)",
-                            c.draft_outreach(firm, r["lead_type"], r["headline"]),
+                            c.draft_outreach(firm, r["lead_type"], r["headline"], first=first),
                             height=280, key=f"draft_{firm}",
                         )
+                        if contact and contact.get("name"):
+                            saved = f"**👤 {contact['name']}**"
+                            if contact.get("role"):
+                                saved += f" — {contact['role']}"
+                            if contact.get("url"):
+                                saved += f"  ·  [profile]({contact['url']})"
+                            st.markdown(saved)
                         st.markdown(
-                            f"[🔗 Find {firm} people on LinkedIn]({c.linkedin_people_url(firm)})  "
-                            f"&nbsp;·&nbsp;  [📅 Your Calendly]({c.CALENDLY})"
+                            f"**Find the right person at {firm}:**  \n"
+                            f"[🔎 LinkedIn]({c.linkedin_people_url(firm)})  ·  "
+                            f"[🧭 Sales Navigator]({c.sales_nav_people_url(firm)})  ·  "
+                            f"[🌐 Google]({c.google_contact_url(firm)})  ·  "
+                            f"[📅 Calendly]({c.CALENDLY})"
                         )
-                        st.caption("Swap “[first name]” for the contact and “[Loom: 90-sec demo]” for your Loom link.")
+                        st.caption("These open a search pre-filtered to the value-creation / operating / "
+                                   "portfolio people at the fund — pick the right one, then save them below "
+                                   "so the link sticks and the draft uses their name.")
+                        if st.checkbox("➕ Save / edit this fund's contact", key=f"cc_show_{firm}"):
+                            cn = st.text_input("Name", value=(contact or {}).get("name", ""), key=f"cn_{firm}")
+                            cr = st.text_input("Role", value=(contact or {}).get("role", ""), key=f"cr_{firm}")
+                            cu = st.text_input("LinkedIn / Sales Nav profile URL",
+                                               value=(contact or {}).get("url", ""), key=f"cu_{firm}")
+                            bcol = st.columns(2)
+                            if bcol[0].button("Save contact", key=f"cs_{firm}"):
+                                if cn.strip():
+                                    st.session_state.contacts[firm] = {
+                                        "name": cn.strip(), "role": cr.strip(), "url": cu.strip()}
+                                else:
+                                    st.session_state.contacts.pop(firm, None)
+                                persist(); st.rerun()
+                            if contact and bcol[1].button("Clear", key=f"cx_{firm}"):
+                                st.session_state.contacts.pop(firm, None)
+                                persist(); st.rerun()
+                        st.caption("Also swap “[Loom: 90-sec demo]” for your Loom link.")
                         tl = fund_timeline(firm)
                         if tl:
                             st.markdown("**📈 Timeline (heating up?)**")
