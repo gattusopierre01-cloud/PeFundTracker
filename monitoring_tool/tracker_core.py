@@ -352,6 +352,61 @@ _ACTION = re.compile(
     re.I)
 
 
+# --- Reject generic descriptors that aren't real fund names --------------------
+_GEN_GEO = {
+    "us", "usa", "uk", "eu", "america", "american", "americas", "britain", "british",
+    "england", "english", "europe", "european", "germany", "german", "france", "french",
+    "netherlands", "dutch", "belgium", "belgian", "italy", "italian", "spain", "spanish",
+    "portugal", "portuguese", "switzerland", "swiss", "ireland", "irish", "nordic", "nordics",
+    "scandinavia", "scandinavian", "sweden", "swedish", "norway", "norwegian", "denmark",
+    "danish", "finland", "finnish", "asia", "asian", "australia", "australian", "canada",
+    "canadian", "japan", "japanese", "india", "indian", "china", "chinese", "korea", "korean",
+    "singapore", "global", "international", "national", "regional", "domestic", "worldwide",
+    "world", "continental", "northern", "southern", "eastern", "western",
+}
+_GEN_CATEGORY = {
+    "private", "equity", "venture", "buyout", "buyouts", "investment", "investments", "invest",
+    "investing", "asset", "assets", "wealth", "risk", "fund", "funds", "management", "manager",
+    "managers", "firm", "firms", "company", "companies", "business", "businesses", "investor",
+    "investors", "group", "groups", "house", "platform", "specialist", "specialists", "provider",
+    "providers", "sponsor", "sponsors", "lender", "lenders", "backer", "backers", "bidder",
+    "bidders", "buyer", "buyers", "owner", "owners", "consortium", "advisory", "advisor",
+    "advisors", "adviser", "advisers", "holding", "holdings", "shop", "financial", "finance",
+    "services", "solutions", "consultancy", "consultant", "conglomerate", "entity", "vehicle",
+    "operator", "operators", "office", "offices", "market", "markets", "capital", "partners",
+    "ventures", "partnership", "associates",
+}
+_GEN_FILLER = {"the", "a", "an", "of", "and", "for", "to", "in", "on", "by", "with", "from",
+               "at", "as", "&", "plc", "inc", "ltd", "llc", "co", "corp", "llp", "gmbh",
+               "sa", "ag", "nv", "bv", "kg"}
+_GEN_ADJ = {"leading", "major", "top", "large", "small", "boutique", "independent", "prominent",
+            "established", "listed", "publicly", "privately", "family", "mid", "midmarket",
+            "lower", "upper", "middle", "cap", "based", "backed", "owned", "led", "focused",
+            "headquartered", "veteran", "longtime", "prolific", "key", "new"}
+_ALL_GENERIC = _GEN_GEO | _GEN_CATEGORY | _GEN_FILLER | _GEN_ADJ
+# Words that, when a generic phrase ENDS in them, mark it as a real name (e.g. "Nordic Capital")
+_NAME_SUFFIX_EXEMPT = {"capital", "partners", "ventures", "holdings", "associates",
+                       "investments", "partnership", "advisors", "advisers"}
+# Words that, as the LAST word, almost never appear in a real fund name → descriptor
+_DESCRIPTOR_ENDINGS = {"firm", "firms", "investor", "investors", "player", "players", "shop",
+                       "specialist", "specialists", "provider", "providers", "buyer", "buyers",
+                       "bidder", "bidders", "consultancy", "conglomerate", "operator",
+                       "operators", "vehicle", "business", "businesses"}
+
+
+def _looks_generic(cand):
+    """True if the candidate is a category description ('US private equity firm',
+    'UK Risk Management Firm') rather than an actual fund name."""
+    toks = [t for t in re.findall(r"[a-z0-9&]+", cand.lower()) if t]
+    if not toks:
+        return True
+    if toks[-1] in _DESCRIPTOR_ENDINGS:
+        return True
+    if all(t in _ALL_GENERIC for t in toks) and toks[-1] not in _NAME_SUFFIX_EXEMPT:
+        return True
+    return False
+
+
 def _extract_candidate(title):
     """Pull a likely fund name from the start of a deal headline, or None."""
     core = re.split(r"\s+-\s+[^-]+$", title)[0]          # drop " - Outlet"
@@ -364,6 +419,8 @@ def _extract_candidate(title):
         return None
     cl = cand.lower()
     if not any(cl.endswith(s) or (" " + s) in (" " + cl) for s in PE_SUFFIXES):
+        return None
+    if _looks_generic(cand):
         return None
     return cand
 
